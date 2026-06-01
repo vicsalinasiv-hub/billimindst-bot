@@ -170,7 +170,7 @@ def post_substack_note(text: str) -> bool:
     """
     headers = {
         "Content-Type": "application/json",
-        "Cookie": f"connect.sid={SUBSTACK_SID}",
+        "Cookie": f"substack.sid={SUBSTACK_SID}",
         "User-Agent": "Mozilla/5.0 BillimindstBot/1.0",
         "Referer": "https://substack.com",
         "Origin": "https://substack.com",
@@ -221,21 +221,33 @@ def post_substack_note(text: str) -> bool:
 def verify_substack_auth() -> bool:
     """Test that our Substack session is valid on startup."""
     headers = {
-        "Cookie": f"connect.sid={SUBSTACK_SID}",
+        "Cookie": f"substack.sid={SUBSTACK_SID}",
         "User-Agent": "Mozilla/5.0 BillimindstBot/1.0",
+        "Referer": "https://substack.com",
     }
     try:
+        # Use the reader feed endpoint — reliable auth check
         r = requests.get(
-            f"{SUBSTACK_API}/profile/me",
+            "https://substack.com/api/v1/reader/feed/home?limit=1",
             headers=headers,
             timeout=10,
         )
         if r.status_code == 200:
-            data = r.json()
-            name = data.get("name") or data.get("handle", "unknown")
-            log.info(f"✅ Substack auth OK — logged in as: {name}")
+            log.info(f"✅ Substack auth OK — session valid")
             return True
+        elif r.status_code == 401:
+            log.error(f"❌ Substack auth failed (401 Unauthorized) — re-extract substack.sid cookie from browser")
+            return False
         else:
+            # Try alternate endpoint
+            r2 = requests.get(
+                "https://substack.com/api/v1/subscriptions",
+                headers=headers,
+                timeout=10,
+            )
+            if r2.status_code == 200:
+                log.info(f"✅ Substack auth OK — session valid")
+                return True
             log.error(f"❌ Substack auth check failed ({r.status_code}) — check your SUBSTACK_SID")
             return False
     except Exception as e:
@@ -253,8 +265,7 @@ def run():
 
     # Verify Substack auth on startup
     if not verify_substack_auth():
-        log.error("Substack authentication failed. Exiting.")
-        raise SystemExit(1)
+        log.warning("⚠️ Substack auth check inconclusive — will attempt posting anyway. If posts fail, re-extract substack.sid.")
 
     posted_ids = load_posted_ids()
     log.info(f"Loaded {len(posted_ids)} previously posted tweet IDs")
